@@ -255,9 +255,12 @@ func (r *ContainerResource) Update(ctx context.Context, req resource.UpdateReque
 
 // Delete stops the container (force, tolerating the never-started "Domain
 // does not exist" case — see stopContainer) and then calls container.delete
-// by id. container.delete is job:false (probed live, correcting an earlier
-// assumption that it was a job like container.stop) and takes no options
-// beyond the id.
+// by id. container.delete is version-dependent: job:false on 26.0 but job:true
+// on 28.0 (probed live). CallJob handles both — it waits for the delete job on
+// 28.0 (so a dependent CheckDestroy / re-apply sees the container actually gone)
+// and falls back cleanly when the method returns synchronously on 26.0. Using a
+// plain Call here returned before the 28.0 delete job finished, leaving the
+// container present. It takes no options beyond the id.
 func (r *ContainerResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	resp.Diagnostics.Append(r.checkVersion(ctx)...)
 	if resp.Diagnostics.HasError() {
@@ -276,7 +279,7 @@ func (r *ContainerResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	if _, err := r.client.Call(ctx, "container.delete", id); err != nil && !client.IsNotFound(err) {
+	if _, err := r.client.CallJob(ctx, "container.delete", id); err != nil && !client.IsNotFound(err) {
 		resp.Diagnostics.AddError("Delete container failed", err.Error())
 	}
 }

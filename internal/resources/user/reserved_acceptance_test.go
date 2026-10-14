@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,13 +29,16 @@ func TestAccUser_reservedPartialUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	var users []struct {
-		ID               int64  `json:"id"`
-		Username         string `json:"username"`
-		FullName         string `json:"full_name"`
-		Home             string `json:"home"`
-		Shell            string `json:"shell"`
-		Locked           bool   `json:"locked"`
-		PasswordDisabled bool   `json:"password_disabled"`
+		ID                   int64    `json:"id"`
+		Username             string   `json:"username"`
+		FullName             string   `json:"full_name"`
+		Home                 string   `json:"home"`
+		Shell                string   `json:"shell"`
+		Locked               bool     `json:"locked"`
+		PasswordDisabled     bool     `json:"password_disabled"`
+		Groups               []int64  `json:"groups"`
+		SudoCommands         []string `json:"sudo_commands"`
+		SudoCommandsNoPasswd []string `json:"sudo_commands_nopasswd"`
 	}
 	if err := json.Unmarshal(raw, &users); err != nil {
 		t.Fatal(err)
@@ -46,7 +50,7 @@ func TestAccUser_reservedPartialUpdate(t *testing.T) {
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), time.Minute)
 		defer done()
-		if _, err := acctest.RestoreCall(cleanup, "user.update", original.ID, map[string]any{"full_name": original.FullName}); err != nil {
+		if _, err := acctest.RestoreCall(cleanup, "user.update", original.ID, map[string]any{"full_name": original.FullName, "groups": original.Groups, "sudo_commands": original.SudoCommands, "sudo_commands_nopasswd": original.SudoCommandsNoPasswd}); err != nil {
 			t.Errorf("restore reserved administrator display name: %v", err)
 			return
 		}
@@ -60,7 +64,7 @@ func TestAccUser_reservedPartialUpdate(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if restored != original {
+		if !reflect.DeepEqual(restored, original) {
 			t.Error("Reserved administrator attributes were not restored")
 		}
 	})
@@ -82,12 +86,19 @@ resource "truenas_user" "test" {
 `, fmt.Sprint(original.ID), original.Username, name, original.Home, original.Shell)
 	}
 	checks := func(name string) resource.TestCheckFunc {
-		return resource.ComposeTestCheckFunc(
+		checks := []resource.TestCheckFunc{
 			resource.TestCheckResourceAttr("truenas_user.test", "full_name", name),
 			resource.TestCheckResourceAttr("truenas_user.test", "home", original.Home),
 			resource.TestCheckResourceAttr("truenas_user.test", "locked", fmt.Sprint(original.Locked)),
 			resource.TestCheckResourceAttr("truenas_user.test", "password_disabled", fmt.Sprint(original.PasswordDisabled)),
-		)
+			resource.TestCheckResourceAttr("truenas_user.test", "groups.#", fmt.Sprint(len(original.Groups))),
+			resource.TestCheckResourceAttr("truenas_user.test", "sudo_commands.#", fmt.Sprint(len(original.SudoCommands))),
+			resource.TestCheckResourceAttr("truenas_user.test", "sudo_commands_nopasswd.#", fmt.Sprint(len(original.SudoCommandsNoPasswd))),
+		}
+		for i, group := range original.Groups {
+			checks = append(checks, resource.TestCheckResourceAttr("truenas_user.test", fmt.Sprintf("groups.%d", i), fmt.Sprint(group)))
+		}
+		return resource.ComposeTestCheckFunc(checks...)
 	}
 	updated := acctest.RandName("TF acceptance administrator")
 	resource.Test(t, resource.TestCase{

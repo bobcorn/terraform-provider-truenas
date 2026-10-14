@@ -28,6 +28,17 @@ var jobPollInterval = 2 * time.Second
 // CallJob for why this is needed.
 const maxJobPollMisses = 5
 
+// CallFilesystemMutation runs a filesystem.setperm / filesystem.setacl job
+// under fsMutationMu, serializing it against every other such mutation on this
+// client. This works around a TrueNAS 25.10 middleware bug where concurrent
+// permission/ACL mutations silently no-op (issue #45). Use it instead of
+// CallJob for those two methods; everything else keeps calling CallJob.
+func (c *Client) CallFilesystemMutation(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
+	c.fsMutationMu.Lock()
+	defer c.fsMutationMu.Unlock()
+	return c.CallJob(ctx, method, params...)
+}
+
 // CallJob calls a TrueNAS method that returns a job ID, then polls until
 // the job reaches SUCCESS or FAILED state.
 //

@@ -116,6 +116,15 @@ type Client struct {
 
 	writeMu sync.Mutex
 
+	// fsMutationMu serializes filesystem.setperm / filesystem.setacl. The
+	// TrueNAS 25.10 middleware silently drops some of these when they run
+	// concurrently — parallel setperm jobs report SUCCESS but leave paths at
+	// their old mode/owner (issue #45, reproduced: 6/12 concurrent setperm no-op,
+	// 12/12 when serialized). The client is the per-run shared object, so one
+	// mutex here serializes these mutations across every resource in a single
+	// Terraform apply. Reads (filesystem.stat/getacl) are not affected.
+	fsMutationMu sync.Mutex
+
 	// sem bounds the number of in-flight concurrent RPCs. TrueNAS rejects
 	// calls beyond a per-connection cap (~20) with JSON-RPC error -32000
 	// ("Maximum number of concurrent calls exceeded"); acquiring a slot in

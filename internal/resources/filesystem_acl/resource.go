@@ -68,7 +68,7 @@ func (r *FilesystemAclResource) Configure(_ context.Context, req resource.Config
 // applyACL calls filesystem.setacl with the plan's entries/uid/gid/options
 // and parses its job result (same shape as filesystem.getacl's response).
 func (r *FilesystemAclResource) applyACL(ctx context.Context, m *FilesystemAclModel) (*fsGetAclAPI, error) {
-	raw, err := r.client.CallJob(ctx, "filesystem.setacl", m.setaclPayload())
+	raw, err := r.client.CallFilesystemMutation(ctx, "filesystem.setacl", m.setaclPayload())
 	if err != nil {
 		return nil, fmt.Errorf("filesystem.setacl: %w", err)
 	}
@@ -185,7 +185,7 @@ func (r *FilesystemAclResource) Delete(ctx context.Context, req resource.DeleteR
 	}
 
 	path := state.Path.ValueString()
-	_, err := r.client.CallJob(ctx, "filesystem.setacl", deleteACLPayload(path))
+	_, err := r.client.CallFilesystemMutation(ctx, "filesystem.setacl", deleteACLPayload(path))
 	if err != nil {
 		if client.IsNotFound(err) {
 			return

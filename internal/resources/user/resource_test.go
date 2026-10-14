@@ -218,52 +218,92 @@ func TestUserCreatePayload_HomeModeAndWebshare(t *testing.T) {
 	}
 }
 
-// TestUserUpdatePayload verifies reserved homes and unconfigured attributes are
-// omitted while explicit false, empty-list, and key-removal changes survive.
+// TestUserUpdatePayload verifies that updatePayload omits uid and username.
 func TestUserUpdatePayload(t *testing.T) {
 	ctx := context.Background()
+
+	// Diff-only: only changed fields are sent. prior is the refreshed state;
+	// plan changes full_name, locked and sshpubkey and leaves the rest alone.
 	prior := UserModel{
-		Home:               types.StringValue("/home/truenas_admin"),
-		Locked:             types.BoolValue(false),
-		SSHPasswordEnabled: types.BoolValue(true),
-		SSHPubKey:          types.StringValue("synthetic-public-key"),
-		SudoCommands:       types.ListValueMust(types.StringType, []attr.Value{types.StringValue("ALL")}),
-		Password:           types.StringNull(),
-		HomeMode:           types.StringNull(),
+		UID:                  types.Int64Value(1234),
+		Username:             types.StringValue("testuser"),
+		FullName:             types.StringValue("Old Name"),
+		Email:                types.StringValue("old@example.com"),
+		Home:                 types.StringValue("/mnt/tank/home"),
+		Shell:                types.StringValue("/bin/bash"),
+		Locked:               types.BoolValue(false),
+		PasswordDisabled:     types.BoolValue(false),
+		SMB:                  types.BoolValue(false),
+		SSHPasswordEnabled:   types.BoolValue(false),
+		SSHPubKey:            types.StringValue("oldkey"),
+		SudoCommands:         types.ListNull(types.StringType),
+		SudoCommandsNoPasswd: types.ListNull(types.StringType),
+		Groups:               types.ListNull(types.Int64Type),
+		Group:                types.Int64Value(1234),
+		Password:             types.StringNull(),
 	}
-	plan := prior
-	plan.Locked = types.BoolValue(true)
-	plan.SSHPasswordEnabled = types.BoolValue(false)
-	plan.SSHPubKey = types.StringValue("")
-	plan.SudoCommands = types.ListValueMust(types.StringType, []attr.Value{})
-	plan.Groups = types.ListUnknown(types.Int64Type)
-	plan.Email = types.StringNull()
-	plan.Shell = types.StringUnknown()
-	payload, diags := plan.updatePayload(ctx, prior)
+	m := prior
+	m.FullName = types.StringValue("Updated Name")
+	m.Locked = types.BoolValue(true)
+	m.SSHPubKey = types.StringValue("") // clear the key
+
+	payload, diags := m.updatePayload(ctx, prior)
 	if diags.HasError() {
-		t.Fatal(diags)
+		t.Fatalf("updatePayload returned errors: %v", diags)
 	}
-	actual, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
+
+	// Changed fields are present (with their payload transforms).
+	if payload["full_name"] != "Updated Name" {
+		t.Errorf("full_name = %v, want Updated Name", payload["full_name"])
 	}
-	want := `{"locked":true,"ssh_password_enabled":false,"sshpubkey":null,"sudo_commands":[]}`
-	if string(actual) != want {
-		t.Fatalf("payload = %s, want %s", actual, want)
+	if payload["locked"] != true {
+		t.Errorf("locked = %v, want true", payload["locked"])
+	}
+	if v, ok := payload["sshpubkey"]; !ok || v != nil {
+		t.Errorf("sshpubkey = %v (present=%v), want nil (empty string clears)", v, ok)
+	}
+	// Unchanged fields are omitted.
+	for _, k := range []string{"email", "home", "shell", "password_disabled", "smb", "ssh_password_enabled", "sudo_commands", "groups", "group"} {
+		if _, ok := payload[k]; ok {
+			t.Errorf("unchanged field %q must be omitted, got %v", k, payload[k])
+		}
+	}
+	// uid, username and (null) password are never in an update payload.
+	for _, k := range []string{"uid", "username", "password"} {
+		if _, ok := payload[k]; ok {
+			t.Errorf("update payload must not contain %q", k)
+		}
 	}
 }
 
-func TestUserUpdatePayload_WriteOnly(t *testing.T) {
-	prior := UserModel{Home: types.StringValue("/mnt/pool/home"), Password: types.StringNull(), HomeMode: types.StringNull()}
-	plan := prior
-	plan.Password = types.StringValue("synthetic-password")
-	plan.HomeMode = types.StringValue("700")
-	payload, diags := plan.updatePayload(context.Background(), prior)
-	if diags.HasError() {
-		t.Fatal(diags)
+// TestUserUpdatePayload_ReservedAdmin is the #43 regression, grounded in a live
+// probe: the reserved administrator rejects both its non-/mnt `home` and its
+// immutable `group` when re-sent unchanged. Diff-only must omit BOTH (and every
+// other unchanged field) while still sending a genuine change.
+func TestUserUpdatePayload_ReservedAdmin(t *testing.T) {
+	ctx := context.Background()
+	prior := UserModel{
+		Username:         types.StringValue("truenas_admin"),
+		Home:             types.StringValue("/home/truenas_admin"),
+		Group:            types.Int64Value(950),
+		Shell:            types.StringValue("/usr/bin/zsh"),
+		Locked:           types.BoolValue(false),
+		PasswordDisabled: types.BoolValue(false),
 	}
-	if len(payload) != 2 || payload["password"] != "synthetic-password" || payload["home_mode"] != "700" {
-		t.Fatalf("write-only update payload = %#v", payload)
+	plan := prior
+	plan.FullName = types.StringValue("Local Administrator (edited)")
+
+	p, diags := plan.updatePayload(ctx, prior)
+	if diags.HasError() {
+		t.Fatalf("updatePayload: %v", diags)
+	}
+	if p["full_name"] != "Local Administrator (edited)" {
+		t.Errorf("full_name = %v, want the edited name", p["full_name"])
+	}
+	for _, k := range []string{"home", "group", "shell", "locked", "password_disabled"} {
+		if _, ok := p[k]; ok {
+			t.Errorf("unchanged %q must be omitted (TrueNAS rejects unchanged home/group on the reserved admin), got %v", k, p[k])
+		}
 	}
 }
 
@@ -587,5 +627,61 @@ func TestResponseToModel_NilPointers(t *testing.T) {
 	}
 	if groups == nil {
 		t.Error("Groups must not be nil when API returns nil")
+	}
+}
+
+// TestUserUpdatePayload verifies reserved homes and unconfigured attributes are
+// omitted while explicit false, empty-list, and key-removal changes survive.
+func TestUserUpdatePayload_Unconfigured(t *testing.T) {
+	ctx := context.Background()
+	prior := UserModel{
+		Home:                 types.StringValue("/home/truenas_admin"),
+		Email:                types.StringValue("prior@example.com"),
+		Shell:                types.StringValue("/usr/bin/zsh"),
+		Groups:               types.ListValueMust(types.Int64Type, []attr.Value{types.Int64Value(40)}),
+		PasswordDisabled:     types.BoolValue(true),
+		SudoCommandsNoPasswd: types.ListValueMust(types.StringType, []attr.Value{types.StringValue("ALL")}),
+		Locked:               types.BoolValue(false),
+		SSHPasswordEnabled:   types.BoolValue(true),
+		SSHPubKey:            types.StringValue("synthetic-public-key"),
+		SudoCommands:         types.ListValueMust(types.StringType, []attr.Value{types.StringValue("ALL")}),
+		Password:             types.StringNull(),
+		HomeMode:             types.StringNull(),
+	}
+	plan := prior
+	plan.Locked = types.BoolValue(true)
+	plan.SSHPasswordEnabled = types.BoolValue(false)
+	plan.SSHPubKey = types.StringValue("")
+	plan.SudoCommands = types.ListValueMust(types.StringType, []attr.Value{})
+	plan.Groups = types.ListUnknown(types.Int64Type)
+	plan.PasswordDisabled = types.BoolUnknown()
+	plan.SudoCommandsNoPasswd = types.ListNull(types.StringType)
+	plan.Email = types.StringNull()
+	plan.Shell = types.StringUnknown()
+	payload, diags := plan.updatePayload(ctx, prior)
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	actual, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"locked":true,"ssh_password_enabled":false,"sshpubkey":null,"sudo_commands":[]}`
+	if string(actual) != want {
+		t.Fatalf("payload = %s, want %s", actual, want)
+	}
+}
+
+func TestUserUpdatePayload_WriteOnly(t *testing.T) {
+	prior := UserModel{Home: types.StringValue("/mnt/pool/home"), Password: types.StringNull(), HomeMode: types.StringNull()}
+	plan := prior
+	plan.Password = types.StringValue("synthetic-password")
+	plan.HomeMode = types.StringValue("700")
+	payload, diags := plan.updatePayload(context.Background(), prior)
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	if len(payload) != 2 || payload["password"] != "synthetic-password" || payload["home_mode"] != "700" {
+		t.Fatalf("write-only update payload = %#v", payload)
 	}
 }

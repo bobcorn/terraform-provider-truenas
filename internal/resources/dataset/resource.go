@@ -277,7 +277,7 @@ func (r *DatasetResource) responseToModel(api *apiResponse, m *DatasetModel) dia
 	// Source-aware compression: report "INHERIT" when it is not set LOCAL
 	// (inherited/default), so compression = "inherit" round-trips instead of
 	// resolving to the inherited value and failing with an inconsistent result. (#38)
-	if api.Compression.Source == "LOCAL" {
+	if isExplicitSource(api.Compression.Source) {
 		m.Compression = preserveCompression(m.Compression, api.Compression.Parsed)
 	} else {
 		m.Compression = preserveCase(m.Compression, "INHERIT")
@@ -286,7 +286,7 @@ func (r *DatasetResource) responseToModel(api *apiResponse, m *DatasetModel) dia
 	// acltype reads back "INHERIT" so acltype = "inherit" round-trips instead of
 	// resolving to the pool default (e.g. "posix") and failing with an
 	// inconsistent result. (#38 class)
-	if api.AClType.Source == "LOCAL" {
+	if isExplicitSource(api.AClType.Source) {
 		m.AClType = preserveCase(m.AClType, api.AClType.Parsed)
 	} else {
 		m.AClType = preserveCase(m.AClType, "INHERIT")

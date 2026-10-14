@@ -17,7 +17,7 @@ same either way and is covered in **[Common setup](#common-setup)** below.
 - **TrueNAS** 25.04 or newer (the provider speaks JSON-RPC over the
   `/api/current` WebSocket endpoint). Verified against 25.10 and 26.0; TrueNAS
   26.0+ additionally supports SCRAM-SHA-512 API-key authentication.
-- For building from source (Part A only): **Go 1.25** or newer.
+- For building from source (Part A only): **Go 1.26** or newer.
 - Network reachability from where Terraform runs to the TrueNAS box over
   the WebSocket port (443 by default, `wss://`).
 

@@ -6,6 +6,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.5.13] - 2026-10-14
+
+### Fixed
+- `truenas_user`: updating the reserved administrator (and other constrained
+  accounts) no longer fails. `user.update` now sends only the attributes that
+  changed, so TrueNAS does not reject an unchanged non-`/mnt` `home` ("Path must
+  start with /mnt/") or an immutable `group` ("cannot be changed") when you edit
+  an unrelated field. (#43)
+- `truenas_dataset` / `truenas_zvol`: ZFS properties set by a replication
+  receive (source `RECEIVED`) are preserved on read instead of being treated as
+  inherited, so importing a replicated/restored dataset or zvol no longer plans a
+  spurious replacement. (#44)
+- `truenas_filesystem_permissions` / `truenas_filesystem_acl`: permission and
+  ACL changes are no longer silently dropped at Terraform's default parallelism.
+  The provider serializes `filesystem.setperm` / `filesystem.setacl`, working
+  around a TrueNAS 25.10 middleware bug where concurrent jobs report success but
+  leave some paths unchanged. (#45)
+- `truenas_container`: deleting a container, and the snapshot-task-run action,
+  now wait for their TrueNAS job to finish. `container.delete` and
+  `pool.snapshottask.run` became jobs on 28.0; the provider was not awaiting
+  them, so a dependent step could run before the work completed. (#4)
+
+### Changed
+- Build and security: the Go toolchain is now 1.26.9 and `golang.org/x/net`
+  is v0.60.0, clearing the HTTP/2 advisories flagged by govulncheck. **Building
+  the provider from source now requires Go 1.26 or newer** (was 1.25).
+
 ## [1.5.12] - 2026-10-13
 
 ### Fixed

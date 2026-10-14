@@ -68,7 +68,7 @@ func (r *FilesystemPermissionsResource) Configure(_ context.Context, req resourc
 // then always reads back the current state via filesystem.stat.
 func (r *FilesystemPermissionsResource) applyAndStat(ctx context.Context, m *FilesystemPermissionsModel) (*fsStatAPI, error) {
 	if m.hasWrite() {
-		if _, err := r.client.CallJob(ctx, "filesystem.setperm", m.setpermPayload()); err != nil {
+		if _, err := r.client.CallFilesystemMutation(ctx, "filesystem.setperm", m.setpermPayload()); err != nil {
 			return nil, fmt.Errorf("filesystem.setperm: %w", err)
 		}
 	}

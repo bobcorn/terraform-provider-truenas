@@ -13,15 +13,25 @@ import (
 
 // zfsSourced is one ZFS property as pool.dataset.get_instance reports it: its
 // human value ("OFF", "128K", "1"), its numeric parsed form, and where the
-// value comes from. Source is "LOCAL" when the property is set on this dataset,
-// and "INHERITED", "DEFAULT" or "RECEIVED" otherwise.
+// value comes from. The source is "LOCAL" when set directly on this zvol and
+// "RECEIVED" when set by a ZFS replication receive — both are explicit values
+// that belong to this zvol. "INHERITED" and "DEFAULT" are not set here.
 type zfsSourced struct {
 	Value  *string         `json:"value"`
 	Parsed json.RawMessage `json:"parsed"`
 	Source string          `json:"source"`
 }
 
-func (z zfsSourced) isLocal() bool { return z.Source == "LOCAL" }
+// isExplicitSource reports whether a ZFS property source represents a value
+// explicitly set on this zvol (LOCAL) or stamped onto it by a replication
+// receive (RECEIVED), as opposed to INHERITED/DEFAULT. A RECEIVED value is a
+// real property of a restored zvol; treating it as inherited loses it and makes
+// an imported replica plan a spurious replacement. (#44)
+func isExplicitSource(source string) bool {
+	return source == "LOCAL" || source == "RECEIVED"
+}
+
+func (z zfsSourced) isExplicit() bool { return isExplicitSource(z.Source) }
 
 // parsedInt decodes the parsed field as an int64, tolerating either a JSON
 // number or a numeric string — pool.dataset.get_instance is not consistent
@@ -56,7 +66,7 @@ func (z zfsSourced) parsedInt() (int64, bool) {
 // expose an explicit "INHERIT" member: a LOCAL value is reported verbatim; a
 // non-LOCAL property reads back as "INHERIT" so that value round-trips. (#38 class)
 func localStringOrInherit(z zfsSourced) types.String {
-	if z.isLocal() && z.Value != nil {
+	if z.isExplicit() && z.Value != nil {
 		return types.StringValue(*z.Value)
 	}
 	return types.StringValue("INHERIT")
@@ -67,7 +77,7 @@ func localStringOrInherit(z zfsSourced) types.String {
 // when LOCAL (the source, not a zero check, is what distinguishes "set to 0"
 // from "inherited").
 func localInt(z zfsSourced) types.Int64 {
-	if z.isLocal() {
+	if z.isExplicit() {
 		if n, ok := z.parsedInt(); ok {
 			return types.Int64Value(n)
 		}

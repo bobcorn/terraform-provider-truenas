@@ -241,7 +241,7 @@ func responseToModel(api *zvolAPI, m *ZvolModel) {
 	// trip instead of failing with an inconsistent result (planned "inherit",
 	// applied "lz4"). preserveCase keeps the user's casing of either the real
 	// algorithm (local) or the inherit sentinel. (#38)
-	if api.Compression.Source == "LOCAL" {
+	if isExplicitSource(api.Compression.Source) {
 		m.Compression = preserveCompression(m.Compression, api.Compression.Parsed)
 	} else {
 		m.Compression = preserveCase(m.Compression, "INHERIT")

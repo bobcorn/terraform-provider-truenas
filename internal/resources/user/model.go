@@ -350,8 +350,8 @@ func (m *UserModel) createPayload(ctx context.Context) (map[string]any, diag.Dia
 	return p, diags
 }
 
-// updatePayload sends only known changes. Re-sending an unchanged reserved
-// home (for example /home/truenas_admin) fails TrueNAS update validation.
+// updatePayload compares Terraform values before JSON conversion so unknown
+// or null attributes cannot become explicit false or empty updates.
 func (m *UserModel) updatePayload(ctx context.Context, prior UserModel) (map[string]any, diag.Diagnostics) {
 	payload, diags := m.basePayload(ctx)
 	for key, values := range map[string][2]attr.Value{

@@ -9,7 +9,34 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
+
+// TestPreserveCompression guards the v1.5.12 compression fix on zvols (mirror of
+// the dataset case): ZFS folds the level-1 fast tier to plain zstd-fast, so
+// compression="ZSTD-FAST-1" must still round-trip when the API reports
+// "zstd-fast"; real drift overwrites state with the lower-cased API value.
+func TestPreserveCompression(t *testing.T) {
+	cases := []struct {
+		name    string
+		current types.String
+		apiVal  string
+		want    string
+	}{
+		{"fast-1 alias kept", types.StringValue("ZSTD-FAST-1"), "zstd-fast", "ZSTD-FAST-1"},
+		{"equal-fold casing kept", types.StringValue("ZSTD-5"), "zstd-5", "ZSTD-5"},
+		{"real drift overwrites", types.StringValue("lz4"), "zstd", "zstd"},
+		{"null current -> lowercased api", types.StringNull(), "lz4", "lz4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := preserveCompression(tc.current, tc.apiVal).ValueString(); got != tc.want {
+				t.Errorf("preserveCompression(%v, %q) = %q, want %q", tc.current, tc.apiVal, got, tc.want)
+			}
+		})
+	}
+}
 
 // fakeStater drives waitForZvolDevice without a real server: it fails the first
 // okAfter-1 stat calls (node absent) then succeeds, or never succeeds when

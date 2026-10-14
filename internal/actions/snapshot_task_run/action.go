@@ -16,7 +16,12 @@ import (
 var _ action.Action = &Action{}
 var _ action.ActionWithConfigure = &Action{}
 
-// Action runs a periodic snapshot task now (pool.snapshottask.run, not a job).
+// Action runs a periodic snapshot task now (pool.snapshottask.run). The method
+// is version-dependent: synchronous on 26.0 but a job on 28.0 (probed live), so
+// it is invoked via CallJob — which waits for completion on 28.0 (the snapshot
+// is actually taken before the action returns) and falls back cleanly when the
+// method returns synchronously on 26.0. A plain Call returned before the 28.0
+// job finished.
 type Action struct{ client *client.Client }
 
 func New() action.Action { return &Action{} }
@@ -62,7 +67,7 @@ func (a *Action) Invoke(ctx context.Context, req action.InvokeRequest, resp *act
 	if resp.SendProgress != nil {
 		resp.SendProgress(action.InvokeProgressEvent{Message: "Running snapshot task…"})
 	}
-	if _, err := a.client.Call(ctx, "pool.snapshottask.run", buildParams(cfg)...); err != nil {
+	if _, err := a.client.CallJob(ctx, "pool.snapshottask.run", buildParams(cfg)...); err != nil {
 		resp.Diagnostics.AddError("Snapshot task run failed", err.Error())
 		return
 	}

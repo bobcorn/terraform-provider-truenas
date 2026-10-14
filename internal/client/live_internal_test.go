@@ -33,8 +33,12 @@ func liveClient(t *testing.T) *Client {
 		t.Fatal(err)
 	}
 	c := New(endpoint, tlsCfg)
+	// Wrap auth in WithRetry (as the provider and acctest helper do): running
+	// the full live suite back-to-back with other packages opens many logins
+	// and can trip TrueNAS's ~20-logins/minute cap (code 16), which would
+	// otherwise fail these tests spuriously.
 	if err := c.Connect(context.Background(), func(ctx context.Context) error {
-		return AuthAPIKey(ctx, c, apiKey)
+		return WithRetry(ctx, func(ctx context.Context) error { return AuthAPIKey(ctx, c, apiKey) })
 	}); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -159,6 +163,69 @@ func TestLiveCallRead_ReconnectsAfterTransportDrop(t *testing.T) {
 	var v string
 	if err := json.Unmarshal(raw, &v); err != nil || v == "" {
 		t.Fatalf("reconnected read = %s (%v)", raw, err)
+	}
+}
+
+// TestLiveCall_ReconnectsAfterTransportDrop force-closes the live connection
+// and asserts a plain Call (not CallRead) re-dials and succeeds. Call gained a
+// pre-send reconnect in v1.5.12: when the socket dropped and nothing has been
+// sent for the call yet, re-dialing and sending once is side-effect-safe, so an
+// idle-closed session no longer surfaces "not connected" on the next operation.
+func TestLiveCall_ReconnectsAfterTransportDrop(t *testing.T) {
+	c := liveClient(t)
+
+	// Kill the transport the way an idle close / network blip would.
+	c.connMu.Lock()
+	c.conn.Close()
+	c.connMu.Unlock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.connMu.Lock()
+		gone := c.conn == nil
+		c.connMu.Unlock()
+		if gone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("readLoop never observed the closed connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	raw, err := c.Call(ctx, "system.version_short")
+	if err != nil {
+		t.Fatalf("Call after transport drop: %v", err)
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil || v == "" {
+		t.Fatalf("reconnected call = %s (%v)", raw, err)
+	}
+}
+
+// TestLiveKeepalive_KeepsSessionAlive asserts the keepalive (v1.5.12) holds the
+// session open across an idle span longer than the server's idle-close window
+// (observed ~45-60s with no traffic). It makes NO calls during the idle, so
+// only the keepalive goroutine can keep c.conn live. Slow by nature (the server
+// timeout cannot be shrunk), so it runs only under the live gate.
+func TestLiveKeepalive_KeepsSessionAlive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow keepalive idle test under -short")
+	}
+	c := liveClient(t)
+
+	// Idle well past the observed idle-close window; keepalive pings at
+	// keepaliveInterval (30s) should keep the connection up throughout.
+	for elapsed := keepaliveInterval; elapsed <= 75*time.Second; elapsed += keepaliveInterval {
+		time.Sleep(keepaliveInterval)
+		c.connMu.Lock()
+		live := c.conn != nil
+		c.connMu.Unlock()
+		if !live {
+			t.Fatalf("connection dropped after ~%s idle despite keepalive", elapsed)
+		}
 	}
 }
 

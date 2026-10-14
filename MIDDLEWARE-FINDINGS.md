@@ -227,11 +227,51 @@ would require clearing it out of band.)
 
 ---
 
+## 7. Concurrent `filesystem.setperm` jobs silently no-op on 25.10
+
+**Severity:** functional — a job reports SUCCESS but does not apply its
+change, so permissions are silently wrong (data-exposure / lockout risk).
+**Observed on:** TrueNAS 25.10.7.
+**Namespace/method:** `filesystem.setperm` (job), run concurrently; the same
+class very likely affects `filesystem.setacl`.
+
+### Summary
+When several `filesystem.setperm` jobs run at once, some of them complete with
+state `SUCCESS` and no error yet leave the target path at its previous
+mode/owner. The jobs are not failing — `core.get_jobs` shows SUCCESS — the
+mutation is just dropped. Reproduced directly against 25.10.7: 12 concurrent
+`filesystem.setperm` jobs (distinct paths, each requesting mode 0750 / uid 1001)
+left **6 of 12** paths at 0755 / uid 0, with zero job errors. Serializing the
+same 12 calls applied **12 of 12**. Matches a user report of
+`truenas_filesystem_permissions` at Terraform's default parallelism leaving
+some paths unchanged and failing with an inconsistent-result error.
+
+### Reproduction
+1. Create 12 datasets (or dirs), note each mountpoint.
+2. Fire 12 `filesystem.setperm` jobs concurrently, each `{path, mode: "750",
+   uid: 1001, gid: 1001, options: {recursive: false}}`.
+3. Wait for all jobs to reach SUCCESS, then `filesystem.stat` each path.
+4. Some paths retain the old mode/owner despite SUCCESS. `-parallelism=1`
+   (or any serialization) applies all of them.
+
+### Expected
+A `filesystem.setperm` job that reports SUCCESS has applied its change;
+concurrent setperm jobs on distinct paths do not interfere.
+
+### Provider handling
+The provider serializes `filesystem.setperm` and `filesystem.setacl` through a
+single client-side lock (`Client.CallFilesystemMutation`), so these mutations
+never run concurrently within a Terraform apply. Removes the dropped-mutation
+race at the cost of serial permission application. In `internal/client/jobs.go`
+and the `filesystem_permissions` / `filesystem_acl` resources.
+
+---
+
 ## Filing notes
 
-Findings 1 and 2 have functional impact (a server crash and a broken
-re-join) and are the strongest upstream candidates. 3–6 are
-correctness/reliability gaps. Reproduction transcripts captured during
+Findings 1, 2 and 7 have functional impact (a server crash, a broken
+re-join, and silently dropped permission changes) and are the strongest
+upstream candidates. 3–6 are correctness/reliability gaps. Reproduction transcripts captured during
 development live under `.superpowers/sdd/` (git-ignored) — attach the
 relevant task report when filing. This document is summarized in
 `TEST-PLAN.md` §10.
