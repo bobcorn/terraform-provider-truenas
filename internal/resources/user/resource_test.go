@@ -218,71 +218,52 @@ func TestUserCreatePayload_HomeModeAndWebshare(t *testing.T) {
 	}
 }
 
-// TestUserUpdatePayload verifies that updatePayload omits uid and username.
+// TestUserUpdatePayload verifies reserved homes and unconfigured attributes are
+// omitted while explicit false, empty-list, and key-removal changes survive.
 func TestUserUpdatePayload(t *testing.T) {
 	ctx := context.Background()
-
-	m := UserModel{
-		UID:                  types.Int64Value(1234),
-		Username:             types.StringValue("testuser"),
-		FullName:             types.StringValue("Updated Name"),
-		Email:                types.StringValue(""),
-		Home:                 types.StringValue("/home/testuser"),
-		Shell:                types.StringValue("/bin/bash"),
-		Locked:               types.BoolValue(false),
-		PasswordDisabled:     types.BoolValue(false),
-		SMB:                  types.BoolValue(false),
-		SSHPasswordEnabled:   types.BoolValue(false),
-		SSHPubKey:            types.StringValue(""),
-		SudoCommands:         types.ListNull(types.StringType),
-		SudoCommandsNoPasswd: types.ListNull(types.StringType),
-		Groups:               types.ListNull(types.Int64Type),
-		Password:             types.StringNull(),
-		Builtin:              types.BoolValue(false),
-		Immutable:            types.BoolValue(false),
-		Local:                types.BoolValue(true),
+	prior := UserModel{
+		Home:               types.StringValue("/home/truenas_admin"),
+		Locked:             types.BoolValue(false),
+		SSHPasswordEnabled: types.BoolValue(true),
+		SSHPubKey:          types.StringValue("synthetic-public-key"),
+		SudoCommands:       types.ListValueMust(types.StringType, []attr.Value{types.StringValue("ALL")}),
+		Password:           types.StringNull(),
+		HomeMode:           types.StringNull(),
 	}
-
-	payload, diags := m.updatePayload(ctx)
+	plan := prior
+	plan.Locked = types.BoolValue(true)
+	plan.SSHPasswordEnabled = types.BoolValue(false)
+	plan.SSHPubKey = types.StringValue("")
+	plan.SudoCommands = types.ListValueMust(types.StringType, []attr.Value{})
+	plan.Groups = types.ListUnknown(types.Int64Type)
+	plan.Email = types.StringNull()
+	plan.Shell = types.StringUnknown()
+	payload, diags := plan.updatePayload(ctx, prior)
 	if diags.HasError() {
-		t.Fatalf("updatePayload returned errors: %v", diags)
+		t.Fatal(diags)
 	}
+	actual, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"locked":true,"ssh_password_enabled":false,"sshpubkey":null,"sudo_commands":[]}`
+	if string(actual) != want {
+		t.Fatalf("payload = %s, want %s", actual, want)
+	}
+}
 
-	// uid and username must NOT be in update payload.
-	if _, ok := payload["uid"]; ok {
-		t.Error("updatePayload must not contain 'uid'")
+func TestUserUpdatePayload_WriteOnly(t *testing.T) {
+	prior := UserModel{Home: types.StringValue("/mnt/pool/home"), Password: types.StringNull(), HomeMode: types.StringNull()}
+	plan := prior
+	plan.Password = types.StringValue("synthetic-password")
+	plan.HomeMode = types.StringValue("700")
+	payload, diags := plan.updatePayload(context.Background(), prior)
+	if diags.HasError() {
+		t.Fatal(diags)
 	}
-	if _, ok := payload["username"]; ok {
-		t.Error("updatePayload must not contain 'username'")
-	}
-
-	// password must NOT be included when null.
-	if _, ok := payload["password"]; ok {
-		t.Error("updatePayload must not contain 'password' when it is null")
-	}
-
-	// email should be nil when empty string.
-	if v, ok := payload["email"]; !ok {
-		t.Error("updatePayload missing 'email'")
-	} else if v != nil {
-		t.Errorf("payload[email] = %v, want nil for empty string", v)
-	}
-
-	// Null lists should produce empty slices, not nil.
-	sudoCmds, ok := payload["sudo_commands"].([]string)
-	if !ok {
-		t.Fatalf("payload[sudo_commands] is %T, want []string", payload["sudo_commands"])
-	}
-	if sudoCmds == nil {
-		t.Error("payload[sudo_commands] must not be nil")
-	}
-
-	groups, ok := payload["groups"].([]int64)
-	if !ok {
-		t.Fatalf("payload[groups] is %T, want []int64", payload["groups"])
-	}
-	if groups == nil {
-		t.Error("payload[groups] must not be nil")
+	if len(payload) != 2 || payload["password"] != "synthetic-password" || payload["home_mode"] != "700" {
+		t.Fatalf("write-only update payload = %#v", payload)
 	}
 }
 
@@ -386,7 +367,7 @@ func TestUserUpdatePayload_GroupIncluded(t *testing.T) {
 		GroupCreate:          types.BoolValue(true), // must never leak into update
 	}
 
-	payload, diags := m.updatePayload(ctx)
+	payload, diags := m.updatePayload(ctx, UserModel{})
 	if diags.HasError() {
 		t.Fatalf("updatePayload returned errors: %v", diags)
 	}

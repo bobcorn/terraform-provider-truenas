@@ -162,7 +162,7 @@ func (r *UserResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 	plan.Password = cfg.Password
 
-	payload, diags := plan.updatePayload(ctx)
+	payload, diags := plan.updatePayload(ctx, state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return

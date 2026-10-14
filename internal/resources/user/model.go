@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -349,9 +350,33 @@ func (m *UserModel) createPayload(ctx context.Context) (map[string]any, diag.Dia
 	return p, diags
 }
 
-// updatePayload omits uid and username (immutable after create).
-func (m *UserModel) updatePayload(ctx context.Context) (map[string]any, diag.Diagnostics) {
-	return m.basePayload(ctx)
+// updatePayload sends only known changes. Re-sending an unchanged reserved
+// home (for example /home/truenas_admin) fails TrueNAS update validation.
+func (m *UserModel) updatePayload(ctx context.Context, prior UserModel) (map[string]any, diag.Diagnostics) {
+	payload, diags := m.basePayload(ctx)
+	for key, values := range map[string][2]attr.Value{
+		"full_name":              {m.FullName, prior.FullName},
+		"email":                  {m.Email, prior.Email},
+		"home":                   {m.Home, prior.Home},
+		"shell":                  {m.Shell, prior.Shell},
+		"locked":                 {m.Locked, prior.Locked},
+		"password_disabled":      {m.PasswordDisabled, prior.PasswordDisabled},
+		"smb":                    {m.SMB, prior.SMB},
+		"webshare":               {m.Webshare, prior.Webshare},
+		"ssh_password_enabled":   {m.SSHPasswordEnabled, prior.SSHPasswordEnabled},
+		"sshpubkey":              {m.SSHPubKey, prior.SSHPubKey},
+		"sudo_commands":          {m.SudoCommands, prior.SudoCommands},
+		"sudo_commands_nopasswd": {m.SudoCommandsNoPasswd, prior.SudoCommandsNoPasswd},
+		"groups":                 {m.Groups, prior.Groups},
+		"group":                  {m.Group, prior.Group},
+	} {
+		value := values[0]
+		if value.IsNull() || value.IsUnknown() || value.Equal(values[1]) {
+			delete(payload, key)
+		}
+	}
+	// Password and home_mode are write-only and cannot be compared with state.
+	return payload, diags
 }
 
 func (m *UserModel) basePayload(ctx context.Context) (map[string]any, diag.Diagnostics) {
